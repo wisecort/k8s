@@ -14,14 +14,23 @@
 - [x] Longhorn
 - [x] 3 réplicas Longhorn
 - [x] teste de PVC
+- [x] Backup Longhorn em Cloudflare R2
+- [x] teste de restore a partir do R2
+- [x] validação dos dados restaurados
 
 ## Próximos passos
 
 ### 1. Backup Longhorn
-- [ ] destino S3-compatible
+
+- [x] destino S3-compatible
+- [x] teste de backup Full
+- [x] teste de restore
 - [ ] política de backup
 - [ ] retenção
-- [ ] teste de restore
+- [ ] Recurring Backup Jobs
+- [ ] monitoramento de falhas
+- [ ] teste periódico de restore
+- [ ] backup periódico do sistema Longhorn
 
 ### 2. Ingress
 - [ ] HAProxy 80/443
@@ -52,7 +61,7 @@
 - [ ] estrutura declarativa de aplicações
 
 ### 7. Disaster Recovery
+- [x] restore de volume a partir do R2
 - [ ] perda de worker
-- [ ] restore de volume
 - [ ] perda de control plane
 - [ ] recuperação completa
