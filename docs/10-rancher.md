@@ -10,7 +10,7 @@
 - IngressClass: traefik
 - TLS: cert-manager com CA interna
 - Fleet: operacional
-- Rancher Monitoring: instalado; ver `docs/11-monitoring.md`
+- Rancher Monitoring: operacional; ver `docs/11-monitoring.md`
 
 ## Arquitetura
 
@@ -84,7 +84,17 @@ Renewal:   2026-11-20T02:03:51Z
 ## Instalação
 
 ~~~bash
-helm upgrade --install rancher rancher-stable/rancher   --namespace cattle-system   --create-namespace   --version 2.15.1   --set hostname=rancher.k8s.internal   --set ingress.tls.source=secret   --set ingress.tls.secretName=rancher-tls   --set replicas=1   --set-string bootstrapPassword="$RANCHER_BOOTSTRAP_PASSWORD"   --wait   --timeout 15m
+helm upgrade --install rancher rancher-stable/rancher \
+  --namespace cattle-system \
+  --create-namespace \
+  --version 2.15.1 \
+  --set hostname=rancher.k8s.internal \
+  --set ingress.tls.source=secret \
+  --set ingress.tls.secretName=rancher-tls \
+  --set replicas=1 \
+  --set-string bootstrapPassword="$RANCHER_BOOTSTRAP_PASSWORD" \
+  --wait \
+  --timeout 15m
 ~~~
 
 A senha bootstrap não é armazenada no Git.
@@ -130,25 +140,28 @@ Resultado validado:
 HTTP/2 200
 ~~~
 
-O endpoint respondeu com a API do Rancher.
-
-O -k foi utilizado porque a CA interna ainda não estava instalada como CA confiável no macOS.
+O `-k` foi utilizado porque a CA interna ainda não estava instalada como CA confiável no macOS.
 
 ## Rancher Monitoring
 
-O monitoramento foi instalado conforme a arquitetura desacoplada do Rancher 2.15:
+O monitoramento está operacional conforme a arquitetura desacoplada do Rancher 2.15:
 
 - `kube-prometheus-stack` 91.4.1;
 - Prometheus v0.94.0;
+- Grafana 13.2.2;
 - `rancher-monitoring-dashboards` 110.0.0+up0.1.2;
 - namespace `cattle-monitoring-system`;
 - dashboards em `cattle-dashboards`;
 - Prometheus, Grafana, Alertmanager, node-exporter e kube-state-metrics operacionais;
-- Monitoring já aparece na UI do Rancher.
+- Monitoring disponível na UI do Rancher;
+- dashboards disponíveis no Grafana;
+- Grafana configurado para acesso anônimo como Viewer.
 
-Os dashboards foram materializados como ConfigMaps em `cattle-dashboards`, porém ainda não estão aparecendo dentro da interface do Grafana. Essa pendência está documentada em `docs/11-monitoring.md`.
+Como a instalação do `rancher-monitoring-dashboards` foi feita diretamente via Helm, foi necessário configurar `global.cattle.clusterId=local` e `global.cattle.clusterName=local`. Isso corrigiu o `appSubUrl` do proxy e eliminou o `Page not found` causado pelo caminho `/k8s/clusters//`.
 
-A documentação oficial do Rancher 2.15 confirma a separação entre `kube-prometheus-stack` como runtime e `rancher-monitoring-dashboards` como camada de dashboards/integração. citeturn0search0
+O Grafana pode registrar `401/403` em algumas APIs secundárias de usuário/equipe quando acessado anonimamente. Essas respostas não impedem a visualização dos dashboards.
+
+Detalhes e comandos estão em `docs/11-monitoring.md`.
 
 ## Escala
 
@@ -159,7 +172,12 @@ Antes de aumentar para 3 réplicas, considerar a instabilidade de I/O observada 
 Depois de estabilizar a camada física de storage, avaliar:
 
 ~~~bash
-helm upgrade rancher rancher-stable/rancher   --namespace cattle-system   --reuse-values   --set replicas=3   --wait   --timeout 15m
+helm upgrade rancher rancher-stable/rancher \
+  --namespace cattle-system \
+  --reuse-values \
+  --set replicas=3 \
+  --wait \
+  --timeout 15m
 ~~~
 
 ## Operação
@@ -187,7 +205,8 @@ kubectl get pods -n cattle-fleet-system
 
 - [ ] instalar/trustar a CA interna no macOS
 - [x] instalar Rancher Monitoring
-- [ ] fazer dashboards aparecerem no Grafana
+- [x] dashboards disponíveis no Grafana
+- [x] integração Grafana via proxy do Rancher
 - [ ] configurar alertas
 - [ ] Argo CD
 - [ ] GitOps
