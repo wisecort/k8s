@@ -2,117 +2,82 @@
 
 ## Objetivo
 
-Definir a arquitetura de proteção e recuperação do cluster RKE2 separando as responsabilidades de Velero, Longhorn e Cloudflare R2.
+Separar as responsabilidades:
 
-## Visão geral
+~~~text
+Kubernetes Objects
+        ↓
+      Velero
+        ↓
+Cloudflare R2 / velero-backups-qg
 
-```
-                         RKE2
-                          |
-              +-----------+-----------+
-              |                       |
-         Kubernetes                Longhorn
-          Objects                  Volumes
-              |                       |
-           Velero                  Backup
-              |                       |
-              +-----------+-----------+
-                          |
-                    Cloudflare R2
-                   /              \
-          velero-backups-qg   longhorn-backups-qg
-```
+PVC Data
+        ↓
+     Longhorn
+        ↓
+Cloudflare R2 / longhorn-backups-qg
+~~~
 
-São utilizados dois buckets R2 separados, com credenciais independentes.
+São utilizados buckets R2 separados e credenciais independentes.
 
 ## Responsabilidades
 
 ### Velero
 
-Protege o estado e os objetos Kubernetes:
-
-- Namespace;
-- Deployment;
-- StatefulSet;
-- DaemonSet;
-- Service;
-- Ingress;
-- ConfigMap;
-- Secret;
-- ServiceAccount;
-- RBAC;
-- Job;
-- CronJob;
-- CRs/CRDs quando incluídos;
-- PersistentVolumeClaim;
-- metadados de PersistentVolume.
+Protege objetos Kubernetes conforme o escopo do backup: namespaces, Deployments, StatefulSets, DaemonSets, Services, Ingresses, ConfigMaps, Secrets, ServiceAccounts, RBAC, Jobs, CronJobs, CRs/CRDs quando incluídos e metadados de PVC/PV.
 
 Nesta arquitetura, Velero não é o backup primário do conteúdo dos PVCs.
 
 ### Longhorn
 
-Protege os dados persistentes dos volumes:
+Protege os dados persistentes dos volumes e fornece snapshots, backups externos e restore.
 
-- filesystem;
-- arquivos;
-- snapshots;
-- réplicas;
-- backups externos;
-- restauração de volumes.
+PVCs que precisam da política automática utilizam:
 
-PVCs de produção devem utilizar `longhorn-prod`.
+~~~yaml
+storageClassName: longhorn-prod
+~~~
 
-### Cloudflare R2
+## Buckets
 
 | Componente | Bucket |
 |---|---|
-| Velero | `velero-backups-qg` |
-| Longhorn | `longhorn-backups-qg` |
+| Velero | velero-backups-qg |
+| Longhorn | longhorn-backups-qg |
 
 Os buckets são privados.
 
 **Nunca armazenar Access Key, Secret Key ou tokens no Git.**
 
-## Separação de responsabilidades
+## Política Longhorn atual
 
-```
-Velero  -> "o que existe no Kubernetes"
-Longhorn -> "os dados que existem no volume"
-R2      -> armazenamento externo dos dois conjuntos
-```
+~~~text
+StorageClass: longhorn-prod
+Réplicas atuais: 1
+Recurring Job: backup-daily-r2
+Horário: 02:00 UTC
+Retenção: 60 backups
+Concorrência: 1
+Backup Target: default
+Backend: Cloudflare R2
+~~~
 
-Um restore Velero isolado não deve ser considerado recuperação do conteúdo de um volume Longhorn.
+A escolha de 1 réplica foi feita para reduzir a amplificação de I/O no ambiente atual, pois os workers estão no mesmo host físico Proxmox. Isso reduz a redundância local do volume e deve ser revisado antes de workloads críticos.
 
-## Fluxo de backup
+## Política Velero atual
 
-### Objetos Kubernetes
+~~~text
+Schedule: backup-daily-r2
+Horário: 04:00 UTC
+Retenção: 30 dias
+Bucket: velero-backups-qg
+Snapshots de volume: desabilitados
+~~~
 
-```
-Deployment / Service / ConfigMap / Secret / PVC
-                         |
-                       Velero
-                         |
-                         v
-                  velero-backups-qg
-```
+## Fluxo de DR
 
-### Dados persistentes
-
-```
-PVC
- |
-Longhorn Volume
- |
-Snapshot / Backup
- |
-v
-longhorn-backups-qg
-```
-
-## Fluxo de Disaster Recovery
-
-```
-                 DESASTRE
+~~~text
+                DESASTRE
                     |
           +---------+---------+
           |                   |
@@ -120,51 +85,30 @@ longhorn-backups-qg
       Velero R2          Longhorn R2
           |                   |
           v                   v
-   Objetos K8s            Volume/Data
+   Objetos Kubernetes     Volume/Data
           |                   |
           +---------+---------+
                     |
                     v
-               Aplicação
+                Aplicação
                     |
                     v
               Dados íntegros
-```
+~~~
 
 Ordem operacional:
 
-1. confirmar disponibilidade dos backups;
+1. confirmar backups;
 2. restaurar objetos via Velero;
-3. não utilizar o PVC vazio provisionado automaticamente como fonte dos dados;
-4. restaurar o volume via Longhorn;
-5. associar o workload ao PVC restaurado;
-6. iniciar a aplicação;
-7. validar os dados;
-8. validar integridade por checksum quando aplicável.
+3. identificar PVCs que precisam de dados;
+4. evitar usar PVC vazio como fonte dos dados;
+5. restaurar volume via Longhorn;
+6. associar o PVC ao workload;
+7. iniciar aplicação;
+8. validar dados;
+9. validar checksum quando aplicável.
 
-## Política
-
-### Longhorn
-
-- diário às 02:00;
-- retenção de 60 backups;
-- concorrência 1;
-- grupo `default`;
-- destino R2;
-- StorageClass de produção `longhorn-prod`.
-
-### Velero
-
-- diário às 04:00;
-- retenção de 30 dias;
-- destino R2;
-- objetos Kubernetes;
-- snapshots de volume desabilitados para esta arquitetura;
-- dados dos PVCs protegidos pelo Longhorn.
-
-## Validação realizada
-
-A arquitetura foi validada em três níveis:
+## Validação
 
 ### Velero
 
@@ -172,35 +116,42 @@ Backup e restore de objetos Kubernetes após perda controlada de namespace.
 
 ### Longhorn
 
-Backup e restore de volume após perda do volume original, com validação do conteúdo por SHA-256.
+Snapshot, Full Backup, envio para R2, restore por fromBackup e recuperação dos arquivos.
 
 ### DR combinado
 
-Foi simulada a perda de namespace, aplicação, PVC e volume Longhorn. Os objetos foram recuperados pelo Velero e os dados pelo Longhorn.
+Perda controlada de namespace, aplicação, PVC e volume Longhorn. Objetos recuperados por Velero e dados por Longhorn.
 
-SHA-256 original e restaurado:
+SHA-256 validado:
 
-```
+~~~text
 69da2dd94af7335e8635d4301a78e43ef9e86abc1f2f54667792f8c40fb1026b
-```
+~~~
 
-## Critério de sucesso
+## Limitação física
 
-- [x] backup Velero disponível;
-- [x] backup Longhorn disponível;
-- [x] namespace restaurado;
-- [x] objetos restaurados;
-- [x] PVC restaurado;
-- [x] volume restaurado;
-- [x] aplicação iniciada;
-- [x] dados originais recuperados;
-- [x] integridade validada.
+Os três workers RKE2 estão hospedados no mesmo Proxmox pve2 e os discos de root e Longhorn utilizam o mesmo backend físico NVME.
 
-## Próximas evoluções
+Logo, réplicas Longhorn em workers diferentes não garantem independência contra perda do host físico.
 
-- monitoramento e alertas;
-- testes periódicos de restore;
-- perda de worker;
-- perda de control plane;
-- recuperação completa do cluster;
-- automação do runbook de DR.
+Para HA de storage real, as réplicas precisam estar em nós com independência física suficiente para o cenário de falha considerado.
+
+## RPO/RTO
+
+Os valores formais de RPO/RTO ainda não foram definidos.
+
+Política atual:
+
+- Longhorn: diário às 02:00 UTC, retenção 60;
+- Velero: diário às 04:00 UTC, retenção 30 dias.
+
+## Próximos testes
+
+- [ ] monitoramento de falha de backup
+- [ ] restore periódico automatizado
+- [ ] perda de worker
+- [ ] perda de host Proxmox
+- [ ] perda de control plane
+- [ ] recuperação completa do cluster
+- [ ] definição formal de RPO/RTO
+- [ ] automação do runbook
