@@ -1,48 +1,47 @@
 # Longhorn
 
-## Versão
+## Estado atual
 
-1.12.1
+- Longhorn: **1.12.1**
+- Data engine: **v1**
+- Nós de storage: rke2-worker01, rke2-worker02, rke2-worker03
+- Control planes: scheduling do Longhorn desabilitado
+- Data path: /var/lib/longhorn
+- Backup externo: Cloudflare R2
+- Backup target: default
 
-## Nós de storage
+> Importante: os três workers estão no mesmo host físico Proxmox pve2. As réplicas do Longhorn fornecem redundância entre VMs/nós Kubernetes, mas não independência contra falha do host físico ou do storage físico compartilhado.
 
-- rke2-worker01
-- rke2-worker02
-- rke2-worker03
+## StorageClass padrão
 
-Os control planes estão com scheduling do Longhorn desabilitado.
+A StorageClass longhorn é a StorageClass padrão criada/gerenciada pelo Longhorn.
 
-## Storage
+Estado atual:
 
-Data path:
+~~~text
+name: longhorn
+provisioner: driver.longhorn.io
+default: true
+numberOfReplicas: 3
+fsType: ext4
+dataEngine: v1
+dataLocality: disabled
+backupTargetName: default
+~~~
 
-`/var/lib/longhorn`
+A StorageClass padrão foi mantida separada da StorageClass de produção.
 
-Cada worker possui disco dedicado para Longhorn.
-
-## Réplicas
-
-Configuração padrão:
-
-`defaultReplicaCount: 3`
-
-StorageClass padrão:
-
-`longhorn`
-
-O valor de réplica foi configurado de forma declarativa pelo Helm.
+Não alterar manualmente parâmetros gerenciados pelo Longhorn para tentar forçar uma configuração diferente. Alterações globais devem ser feitas pela configuração do Helm/Longhorn.
 
 ## StorageClass de produção
 
-A StorageClass padrão `longhorn` foi mantida sem alterações para preservar o comportamento padrão do cluster.
+Foi criada uma StorageClass específica:
 
-Para workloads de produção foi criada a StorageClass:
+longhorn-prod
 
-`longhorn-prod`
+Configuração atual:
 
-Configuração:
-
-```yaml
+~~~yaml
 apiVersion: storage.k8s.io/v1
 kind: StorageClass
 metadata:
@@ -52,7 +51,7 @@ allowVolumeExpansion: true
 reclaimPolicy: Delete
 volumeBindingMode: Immediate
 parameters:
-  numberOfReplicas: "3"
+  numberOfReplicas: "1"
   staleReplicaTimeout: "30"
   fromBackup: ""
   fsType: "ext4"
@@ -62,208 +61,75 @@ parameters:
   dataEngine: "v1"
   backupTargetName: "default"
   recurringJobSelector: '[{"name":"default","isGroup":true}]'
-```
+~~~
 
-Novos PVCs de produção devem utilizar:
+PVCs que precisam da política automática de backup devem usar:
 
-```yaml
+~~~yaml
 spec:
   storageClassName: longhorn-prod
-```
+~~~
 
-A StorageClass aplica o `recurringJobSelector` na criação de novos volumes.
+### Motivo da 1 réplica
 
-Validação realizada com o volume:
+A configuração atual foi definida para reduzir a amplificação de I/O no ambiente, pois os três workers compartilham o mesmo storage físico do host Proxmox pve2.
 
-`pvc-d281dc1f-6b33-4889-a640-4b92fc87290b`
+Isso é uma decisão operacional do ambiente atual e não equivale a HA de storage físico. Com uma réplica, a disponibilidade do volume depende do nó que hospeda a réplica.
 
-O volume recebeu automaticamente o label:
+Antes de workloads críticos, avaliar storage físico independente entre hosts Proxmox e/ou retornar volumes críticos para 3 réplicas em nós fisicamente independentes.
 
-```
-recurring-job-group.longhorn.io/default=enabled
-```
+## Cloudflare R2
 
-e foi validado como:
+Bucket:
 
-```
-State: attached
-Robustness: healthy
-Number Of Replicas: 3
-```
+~~~text
+longhorn-backups-qg
+~~~
 
-## Backup externo
+Região: auto
 
-O Longhorn utiliza **Cloudflare R2** como backup target S3-compatible.
+Path:
 
-Configuração lógica:
+~~~text
+s3://longhorn-backups-qg@auto/backupstore
+~~~
 
-- Bucket: `longhorn-backups-qg`
-- Região: `auto`
-- Endpoint S3: configurado no Secret do Longhorn
-- Backup target: `default`
-- Caminho: `s3://longhorn-backups-qg@auto/backupstore`
-- Secret: `cloudflare-r2-longhorn` no namespace `longhorn-system`
+Secret:
 
-**Nunca armazenar Access Key, Secret Key ou tokens no Git.**
+~~~text
+cloudflare-r2-longhorn
+Namespace: longhorn-system
+~~~
 
-O Secret utiliza as credenciais S3 e o endpoint R2. Para Cloudflare R2, o endpoint deve ser informado através de `AWS_ENDPOINTS`, evitando que o Longhorn tente resolver o endpoint AWS padrão.
+O endpoint S3-compatible é armazenado no Secret através de AWS_ENDPOINTS.
 
-### Verificar o BackupTarget
+**Credenciais, Access Key, Secret Key e tokens nunca devem ser armazenados no Git.**
 
-```bash
-kubectl -n longhorn-system get backuptarget default
-kubectl -n longhorn-system get backuptarget default -o yaml
-```
+BackupTarget:
 
-O campo `status.available` deve estar `true`.
-
-## Backup manual
-
-O fluxo validado foi:
-
-```
-PVC
-  ↓
-Longhorn Volume
-  ↓
-Snapshot
-  ↓
-Backup Full
-  ↓
-Cloudflare R2
-```
-
-O snapshot pode ser criado pela UI do Longhorn.
-
-Listar snapshots:
-
-```bash
-kubectl -n longhorn-system get snapshots.longhorn.io
-```
-
-Depois, criar o backup a partir de um snapshot válido. O recurso `Backup` usa `spec.snapshotName`; não existe `spec.volume`.
-
-Exemplo:
-
-```yaml
+~~~yaml
 apiVersion: longhorn.io/v1beta2
-kind: Backup
+kind: BackupTarget
 metadata:
-  name: exemplo-backup
+  name: default
   namespace: longhorn-system
 spec:
-  snapshotName: snap-EXEMPLO
-  backupMode: full
-```
+  backupTargetURL: s3://longhorn-backups-qg@auto/backupstore
+  credentialSecret: cloudflare-r2-longhorn
+  pollInterval: 5m
+~~~
 
-Aplicar:
+Verificar:
 
-```bash
-kubectl apply -f backup.yaml
-```
-
-Acompanhar:
-
-```bash
-kubectl -n longhorn-system get backups.longhorn.io -w
-```
-
-Validar:
-
-```bash
-kubectl -n longhorn-system get backups.longhorn.io -o wide
-kubectl -n longhorn-system describe backup <BACKUP_NAME>
-```
-
-Um backup válido deve chegar a:
-
-```
-STATE: Completed
-Progress: 100
-Backup Target Name: default
-```
-
-O método de compressão utilizado nos testes foi LZ4.
-
-## Teste de backup e restore realizado
-
-Foi criado um PVC de 1Gi com um Pod de teste. Foram gravados:
-
-- `teste.txt`
-- `data-criacao.txt`
-- `hostname.txt`
-- `teste.bin` de 10 MiB
-
-O conteúdo de `teste.txt` foi:
-
-```
-LONGHORN-R2-TEST
-```
-
-Foi criado um snapshot pelo Longhorn e executado um **Full Backup** para o R2.
-
-Resultado do backup:
-
-```
-State: Completed
-Progress: 100
-Backup Target: default
-Compression: lz4
-```
-
-O backup foi posteriormente restaurado criando uma StorageClass temporária com `parameters.fromBackup` apontando para a URL do backup.
-
-Exemplo:
-
-```yaml
-apiVersion: storage.k8s.io/v1
-kind: StorageClass
-metadata:
-  name: longhorn-r2-restore
-provisioner: driver.longhorn.io
-allowVolumeExpansion: true
-reclaimPolicy: Delete
-volumeBindingMode: Immediate
-parameters:
-  numberOfReplicas: "3"
-  staleReplicaTimeout: "2880"
-  fromBackup: "s3://<bucket>@auto/backupstore?backup=<backup>&volume=<volume>"
-  fsType: "ext4"
-```
-
-Depois foi criado um novo PVC usando essa StorageClass.
-
-O PVC restaurado ficou `Bound`, o volume foi montado em um Pod e os arquivos originais foram recuperados.
-
-Validações realizadas:
-
-```bash
-kubectl exec r2-restore-pod -- sh -c 'ls -lh /data'
-kubectl exec r2-restore-pod -- cat /data/teste.txt
-kubectl exec r2-restore-pod -- sha256sum /data/teste.bin
-```
-
-O arquivo `teste.txt` retornou:
-
-```
-LONGHORN-R2-TEST
-```
-
-O arquivo `teste.bin` foi recuperado com 10 MiB.
-
-Esse teste comprovou o fluxo:
-
-```
-Longhorn → Snapshot → Cloudflare R2 → Restore → PVC → Pod → dados
-```
-
-O parâmetro `fromBackup` é o mecanismo utilizado pelo Longhorn para restaurar um volume a partir de uma URL de backup.
+~~~bash
+kubectl -n longhorn-system get backuptarget default
+~~~
 
 ## Backup recorrente
 
-Foi criada uma política de backup recorrente para produção:
+Foi criada:
 
-```yaml
+~~~yaml
 apiVersion: longhorn.io/v1beta2
 kind: RecurringJob
 metadata:
@@ -276,135 +142,108 @@ spec:
     - default
   retain: 60
   concurrency: 1
-```
+~~~
 
 Política:
 
-- frequência: diária
-- horário: 02:00
-- retenção: 60 backups
-- concorrência: 1
-- tarefa: backup
-- grupo: `default`
-- destino: BackupTarget `default` → Cloudflare R2
+| Parâmetro | Valor |
+|---|---|
+| Frequência | diária |
+| Horário | 02:00 UTC |
+| Tarefa | backup |
+| Grupo | default |
+| Retenção | 60 backups |
+| Concorrência | 1 |
+| Destino | BackupTarget default |
+| Backend | Cloudflare R2 |
 
-O CronJob Kubernetes correspondente foi validado e uma execução manual foi realizada com sucesso.
+A longhorn-prod seleciona o grupo default através de recurringJobSelector.
 
-Execução validada:
+## Backup recorrente validado
 
-```
+Execução manual:
+
+~~~text
 Job: backup-daily-r2-manual-1789947433
 Status: Complete
 Completions: 1/1
 Duration: 29s
-```
+~~~
 
-O backup produzido foi:
+Backup produzido:
 
-```
+~~~text
 Backup: backup-40c3f6c4e3b9452d
 State: Completed
 Size: 67108864
 Volume: pvc-d281dc1f-6b33-4889-a640-4b92fc87290b
-```
+~~~
 
 O volume registrou:
 
-```
+~~~text
 LAST-BACKUP: backup-40c3f6c4e3b9452d
 LAST-BACKUP-AT: 2026-09-20T23:37:21Z
 STATE: attached
 ROBUSTNESS: healthy
-```
+~~~
 
-O RecurringJob registrou:
+## Teste manual de backup e restore
 
-```
-executionCount: 1
-```
+Foi criado um PVC de 1Gi com dados de teste, incluindo teste.txt, data-criacao.txt, hostname.txt e teste.bin de 10 MiB.
 
-Isso comprovou o fluxo:
+teste.txt:
 
-```
-longhorn-prod
-  ↓
-recurring-job-group/default
-  ↓
-backup-daily-r2
-  ↓
-CronJob
-  ↓
-Longhorn Backup
-  ↓
+~~~text
+LONGHORN-R2-TEST
+~~~
+
+Fluxo validado:
+
+~~~text
+PVC
+ ↓
+Longhorn Volume
+ ↓
+Snapshot
+ ↓
+Full Backup
+ ↓
 Cloudflare R2
-```
+ ↓
+StorageClass temporária com fromBackup
+ ↓
+PVC restaurado
+ ↓
+Pod
+ ↓
+Dados recuperados
+~~~
 
-Para workloads de produção, utilizar `longhorn-prod` como StorageClass para que novos volumes recebam automaticamente a política de backup recorrente.
+Backup:
 
-## Política operacional
+~~~text
+backup-d1107a4efea04084
+State: Completed
+Progress: 100
+Compression: lz4
+~~~
 
-Para produção:
+O restore recuperou teste.txt e o arquivo binário de 10 MiB.
 
-- usar `longhorn-prod` nos PVCs de aplicação;
-- manter 3 réplicas;
-- manter o backup recorrente diário;
-- manter retenção de 60 backups;
-- utilizar Cloudflare R2 como destino externo;
-- monitorar falhas de backup;
-- executar testes periódicos de restore;
-- manter o backup do sistema Longhorn no plano de Disaster Recovery.
+SHA-256 registrado no restore:
 
-A retenção de 60 representa 60 execuções de backup mantidas; a duração efetiva da janela de histórico depende da frequência real de execução.
+~~~text
+15bf54eef18075760401db54095cd988c773750a32515114f1fa78ba47a53b3e
+~~~
 
-## Verificação
+O SHA-256 original desse teste não foi preservado nesta documentação; portanto, não declarar igualdade byte-a-byte para esse teste.
 
-```bash
-kubectl -n longhorn-system get nodes
-kubectl -n longhorn-system get volumes -o wide
-kubectl -n longhorn-system get replicas -o wide
-kubectl -n longhorn-system get backuptarget default
-kubectl -n longhorn-system get backupvolumes.longhorn.io
-kubectl -n longhorn-system get backups.longhorn.io
-kubectl -n longhorn-system get recurringjobs.longhorn.io
-kubectl -n longhorn-system get cronjob backup-daily-r2
-```
+## Restore
 
-## Limpeza após testes
+O mecanismo utilizado é parameters.fromBackup.
 
-Os recursos Kubernetes usados somente para o teste podem ser removidos sem remover o backup já armazenado no R2:
-
-```bash
-kubectl delete pod r2-restore-pod r2-test-pod
-kubectl delete pvc r2-restore-pvc r2-test-pvc
-kubectl delete storageclass longhorn-r2-restore
-```
-
-**Atenção:** não remover o Backup/BackupVolume do Longhorn ou objetos do bucket R2 se o objetivo for preservar o ponto de recuperação do teste.
-
-O PVC/Pod usado para validar a StorageClass `longhorn-prod` também pode ser removido após a validação:
-
-```bash
-kubectl delete pod backup-policy-test
-kubectl delete pvc backup-policy-test
-```
-
-O backup já armazenado no R2 não depende desses recursos Kubernetes permanecerem no cluster.
-
-## Próximo passo
-
-- backup periódico do sistema Longhorn;
-- monitoramento e alertas de falha;
-- teste periódico de restore;
-- integração com o plano de Disaster Recovery.
-
-
-## Restore de volume para Disaster Recovery
-
-O mecanismo validado para restore utiliza uma StorageClass temporária com `fromBackup` apontando para o backup no R2.
-
-Exemplo:
-
-```yaml
+~~~yaml
 apiVersion: storage.k8s.io/v1
 kind: StorageClass
 metadata:
@@ -416,40 +255,103 @@ volumeBindingMode: Immediate
 parameters:
   numberOfReplicas: "3"
   staleReplicaTimeout: "2880"
-  fromBackup: "s3://<bucket>@auto/backupstore?backup=<backup>&volume=<volume>"
+  fromBackup: "s3://longhorn-backups-qg@auto/backupstore?backup=<backup>&volume=<volume>"
   fsType: "ext4"
   dataLocality: "disabled"
   unmapMarkSnapChainRemoved: "ignored"
   disableRevisionCounter: "true"
   dataEngine: "v1"
   backupTargetName: "default"
-```
+~~~
 
-O volume restaurado deve ser validado como `healthy` antes de iniciar o workload.
+## Observação sobre snapshots
 
-## DR combinado validado
+Foi tentada inicialmente a criação de snapshot/backup via CR de forma incorreta e o Longhorn retornou erro relacionado ao controle interno do snapshot.
 
-Foi testada a perda de namespace, PVC e volume original.
+O fluxo validado foi criar o snapshot pela UI do Longhorn e executar o backup a partir de um snapshot válido.
 
-A recuperação utilizou:
+Para Backup, utilizar:
 
-```
-Velero -> objetos Kubernetes
-Longhorn -> dados do PVC
-```
+~~~yaml
+spec:
+  snapshotName: <SNAPSHOT>
+~~~
 
-O volume original foi destruído e restaurado a partir de:
+Não utilizar spec.volume.
 
-```
+## DR combinado
+
+Foi realizado teste com namespace, Deployment, Service, ConfigMap, Secret, PVC longhorn-prod e volume Longhorn.
+
+Backup Velero:
+
+~~~text
+dr-test-combined
+~~~
+
+Backup Longhorn:
+
+~~~text
 backup-df6691ad8e4e450f
-```
+~~~
 
-O volume restaurado utilizou 3 réplicas.
+Volume original:
 
-O arquivo `/data/teste.bin` apresentou o mesmo SHA-256 antes e depois do desastre:
+~~~text
+pvc-4d7f4ce2-15ea-4cff-9b26-51797719fa2f
+~~~
 
-```
+O namespace foi removido e a recuperação ocorreu em duas camadas:
+
+~~~text
+Velero
+  ↓
+Objetos Kubernetes
+
+Longhorn
+  ↓
+Dados do volume
+~~~
+
+SHA-256 validado antes e depois:
+
+~~~text
 69da2dd94af7335e8635d4301a78e43ef9e86abc1f2f54667792f8c40fb1026b
-```
+~~~
 
-Não considerar o restore Velero isoladamente como recuperação dos dados do PVC.
+Os recursos de teste foram posteriormente removidos.
+
+## Verificação
+
+~~~bash
+kubectl -n longhorn-system get nodes
+kubectl -n longhorn-system get volumes.longhorn.io -o wide
+kubectl -n longhorn-system get replicas.longhorn.io -o wide
+kubectl -n longhorn-system get backuptarget default
+kubectl -n longhorn-system get backupvolumes.longhorn.io
+kubectl -n longhorn-system get backups.longhorn.io
+kubectl -n longhorn-system get recurringjobs.longhorn.io
+kubectl -n longhorn-system get cronjob backup-daily-r2
+kubectl get storageclass
+~~~
+
+## Política operacional
+
+- usar longhorn-prod nos PVCs que precisam da política de backup;
+- manter backup diário às 02:00 UTC;
+- retenção de 60 backups;
+- utilizar Cloudflare R2;
+- não versionar credenciais;
+- executar testes periódicos de restore;
+- monitorar falhas;
+- revisar a decisão de 1 réplica antes de workloads críticos.
+
+## Próximos passos
+
+- monitoramento de falhas;
+- teste periódico de restore;
+- backup do sistema Longhorn;
+- revisão da topologia física de storage;
+- teste de perda de worker;
+- teste de perda de host Proxmox;
+- definição de RPO/RTO.
