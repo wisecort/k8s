@@ -26,6 +26,10 @@
 - [x] instalação do Velero 1.18.2
 - [x] criação do bucket R2 separado para Velero
 - [x] BackupStorageLocation do Velero validado como Available
+- [x] backup de objetos Kubernetes
+- [x] perda controlada de namespace de teste
+- [x] restore de objetos Kubernetes via Velero
+- [x] aplicação de teste restaurada e Running
 
 ## Próximos passos
 
@@ -48,13 +52,15 @@
 - [x] bucket R2 separado
 - [x] BackupStorageLocation
 - [x] validação de acesso ao R2
-- [ ] resolver incompatibilidade `x-amz-tagging` com Cloudflare R2
-- [ ] backup de objetos Kubernetes
-- [ ] restore de objetos Kubernetes
-- [ ] política de retenção
-- [ ] agendamento de backup
+- [x] backup de objetos Kubernetes
+- [x] restore de objetos Kubernetes
+- [x] teste de perda de namespace
+- [ ] acompanhar estabilidade da integração `x-amz-tagging` / R2
+- [ ] política de retenção de 30 dias
+- [ ] Schedule diário às 04:00
+- [ ] validar backup automático do Schedule
 - [ ] monitoramento de falhas
-- [ ] teste de Disaster Recovery
+- [ ] teste de Disaster Recovery completo com PVC
 
 ### 3. Ingress
 
@@ -92,7 +98,8 @@
 ### 8. Disaster Recovery
 
 - [x] restore de volume a partir do R2
-- [ ] restore de objetos Kubernetes via Velero
+- [x] restore de objetos Kubernetes via Velero
+- [ ] DR combinado: objetos Velero + dados Longhorn
 - [ ] perda de worker
 - [ ] perda de control plane
 - [ ] recuperação completa
