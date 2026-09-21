@@ -6,16 +6,19 @@
 - RKE2/Kubernetes: v1.36.4+rke2r1
 - `kube-prometheus-stack`: 91.4.1
 - Prometheus app: v0.94.0
+- Grafana: 13.2.2
 - `rancher-monitoring-dashboards`: 110.0.0+up0.1.2
 - Namespace: `cattle-monitoring-system`
 - Namespace dos dashboards: `cattle-dashboards`
 - Runtime de monitoramento: operacional
-- Integração com Rancher: operacional; Monitoring aparece na UI
-- Grafana: operacional, porém os dashboards ainda não estão aparecendo na interface Grafana
+- Integração com Rancher: operacional
+- Grafana: operacional
+- Dashboards: disponíveis no Grafana
+- Acesso anônimo: habilitado como `Viewer`
 
 ## Arquitetura
 
-A partir do Rancher 2.15, o monitoramento novo utiliza uma arquitetura desacoplada: o `kube-prometheus-stack` fornece o runtime de observabilidade e o `rancher-monitoring-dashboards` fornece os artefatos de dashboards e a integração com a UI do Rancher.
+A partir do Rancher 2.15, o monitoramento utiliza uma arquitetura desacoplada: o `kube-prometheus-stack` fornece o runtime de observabilidade e o `rancher-monitoring-dashboards` fornece os artefatos de dashboards e a integração com a UI do Rancher.
 
 ~~~text
                   Rancher 2.15.1
@@ -29,7 +32,7 @@ A partir do Rancher 2.15, o monitoramento novo utiliza uma arquitetura desacopla
        Rancher UI           cattle-dashboards
                                  |
                                  v
-                           Grafana dashboards
+                              Grafana
 
           kube-prometheus-stack
              |
@@ -42,8 +45,6 @@ A partir do Rancher 2.15, o monitoramento novo utiliza uma arquitetura desacopla
        |
        +-- node-exporter
 ~~~
-
-A documentação oficial do Rancher 2.15 descreve essa separação entre o runtime `kube-prometheus-stack` e o chart `rancher-monitoring-dashboards`. citeturn0search0
 
 ## Instalação do runtime
 
@@ -62,10 +63,6 @@ helm upgrade --install kube-prometheus-stack \
   --timeout 10m
 ~~~
 
-O Prometheus foi instalado com os selectors de ServiceMonitor e PodMonitor abertos para permitir a integração com os monitores do cluster.
-
-Os exporters de etcd, controller-manager, scheduler e kube-proxy foram deixados desabilitados. Essa configuração é compatível com o modelo documentado pelo Rancher para o novo chart de dashboards. citeturn0search0
-
 ## Rancher Monitoring Dashboards
 
 ~~~bash
@@ -78,54 +75,146 @@ helm upgrade --install rancher-monitoring-dashboards \
   --timeout 10m
 ~~~
 
-O `rancherMonitoring.enabled=false` foi utilizado porque a instalação inicial apresentou rejeição de um `ServiceMonitor` com:
+O `rancherMonitoring.enabled=false` foi utilizado porque a instalação inicial apresentou rejeição de um `ServiceMonitor` com `metricRelabelings: null`.
 
-~~~text
-spec.endpoints[0].metricRelabelings:
-Invalid value: "null"
+## Integração com o Rancher
+
+Como a instalação do `rancher-monitoring-dashboards` foi feita diretamente via Helm, foi necessário informar o cluster local:
+
+~~~bash
+helm upgrade rancher-monitoring-dashboards \
+  rancher-charts/rancher-monitoring-dashboards \
+  --namespace cattle-monitoring-system \
+  --version 110.0.0+up0.1.2 \
+  --reuse-values \
+  --set global.cattle.clusterId=local \
+  --set global.cattle.clusterName=local \
+  --wait \
+  --timeout 10m
 ~~~
 
-Com a integração específica de métricas do chart desabilitada, a instalação foi concluída normalmente e o Rancher passou a exibir a área Monitoring.
+Sem esse valor, o `appSubUrl` do proxy era gerado com `/k8s/clusters//`, causando `Page not found` no acesso pelo Rancher.
+
+Após o ajuste, o proxy passou a utilizar:
+
+~~~text
+/api/v1/namespaces/cattle-monitoring-system/services/http:rancher-monitoring-grafana:80/proxy
+~~~
+
+O Service `rancher-monitoring-grafana` é um proxy Nginx que encaminha para o Grafana real:
+
+~~~text
+rancher-monitoring-grafana:80
+        |
+        v
+monitoring-proxy:8080
+        |
+        v
+kube-prometheus-stack-grafana:80
+        |
+        v
+Grafana:3000
+~~~
+
+## Acesso anônimo ao Grafana
+
+Foi habilitado acesso anônimo somente como Viewer.
+
+Configuração efetiva:
+
+~~~ini
+[auth.anonymous]
+enabled = true
+org_role = Viewer
+~~~
+
+O valor foi aplicado ao `grafana.ini` usando um arquivo de valores adicional:
+
+~~~yaml
+grafana:
+  grafana.ini:
+    auth.anonymous:
+      enabled: true
+      org_role: Viewer
+~~~
+
+Validação:
+
+~~~bash
+kubectl -n cattle-monitoring-system get cm kube-prometheus-stack-grafana \
+  -o jsonpath='{.data.grafana\\.ini}' | grep -A3 '\\[auth.anonymous\\]'
+~~~
+
+Resultado validado:
+
+~~~text
+[auth.anonymous]
+enabled = true
+org_role = Viewer
+~~~
+
+## Comportamento de autenticação
+
+O acesso anônimo permite abrir os dashboards e consultar métricas como Viewer.
+
+Durante a validação, o Grafana registrou `401` em algumas chamadas de APIs específicas de usuário:
+
+~~~text
+/api/user/stars
+/api/user/teams
+~~~
+
+Também foi observado `403` em:
+
+~~~text
+/api/teams/search
+~~~
+
+Essas respostas estão relacionadas a funcionalidades de usuário/equipe não disponíveis para a identidade anônima e **não impedem a visualização dos dashboards**.
+
+Os logs também confirmaram consultas Prometheus bem-sucedidas:
+
+~~~text
+endpoint=queryData
+dsName=Prometheus
+status=ok
+~~~
+
+Portanto, o estado atual é considerado operacional para visualização e monitoramento.
 
 ## Estado validado
 
 ~~~text
-cattle-monitoring-system
-
-alertmanager-kube-prometheus-stack-alertmanager-0                 2/2 Running
-kube-prometheus-stack-grafana                                     3/3 Running
-kube-prometheus-stack-kube-state-metrics                          1/1 Running
-kube-prometheus-stack-operator                                    1/1 Running
-kube-prometheus-stack-prometheus-node-exporter                     6/6 Running
-prometheus-kube-prometheus-stack-prometheus-0                    2/2 Running
-rancher-monitoring-dashboards-monitoring-proxy                    1/1 Running
+Prometheus          OK
+Grafana             OK
+Alertmanager        OK
+Node Exporter       OK
+kube-state-metrics  OK
+Rancher Monitoring  OK
+Dashboard ConfigMaps OK
+Dashboards Grafana  OK
+Prometheus queries  OK
 ~~~
 
-O Rancher já apresenta o menu/área de Monitoring.
-
-## Serviços de integração
-
-O chart criou os serviços esperados pelo Rancher:
+Pods validados em `cattle-monitoring-system`:
 
 ~~~text
-rancher-monitoring-prometheus
-rancher-monitoring-grafana
-rancher-monitoring-alertmanager
+alertmanager-kube-prometheus-stack-alertmanager-0
+kube-prometheus-stack-grafana
+kube-prometheus-stack-kube-state-metrics
+kube-prometheus-stack-operator
+kube-prometheus-stack-prometheus-node-exporter-*
+prometheus-kube-prometheus-stack-prometheus-0
+rancher-monitoring-dashboards-monitoring-proxy
 ~~~
-
-Os endpoints validados foram:
-
-~~~text
-rancher-monitoring-prometheus     10.42.3.34:8090
-rancher-monitoring-grafana        10.42.3.34:8080
-rancher-monitoring-alertmanager   10.42.3.34:8093
-~~~
-
-Esses endpoints são fornecidos pelo proxy do chart para a integração da UI do Rancher.
 
 ## Dashboards
 
-Os artefatos de dashboards foram criados no namespace `cattle-dashboards`.
+Os artefatos de dashboards são criados como ConfigMaps no namespace `cattle-dashboards`, usando o label:
+
+~~~text
+grafana_dashboard=1
+~~~
 
 Exemplos validados:
 
@@ -143,36 +232,11 @@ rancher-fluentbit-dashboard
 rancher-fluentd-dashboard
 ~~~
 
-Comando utilizado:
+Comando:
 
 ~~~bash
 kubectl get cm -n cattle-dashboards -l grafana_dashboard=1
 ~~~
-
-## Pendência atual
-
-O runtime está saudável e os ConfigMaps dos dashboards existem, mas os dashboards ainda não aparecem no Grafana.
-
-Estado atual:
-
-~~~text
-Prometheus       OK
-Grafana          OK
-Alertmanager     OK
-Node Exporter    OK
-kube-state-metrics OK
-Rancher Monitoring UI OK
-Dashboard ConfigMaps OK
-Dashboards dentro do Grafana PENDENTE
-~~~
-
-A investigação deve continuar no sidecar de dashboards do Grafana e na forma como ele está observando o namespace `cattle-dashboards`.
-
-Não considerar essa etapa concluída até os dashboards aparecerem no Grafana.
-
-## Observação
-
-A documentação oficial do Rancher 2.15 informa que o `rancher-monitoring-dashboards` fornece os dashboards e a integração com a UI, enquanto Prometheus, Grafana, Alertmanager e exporters são fornecidos separadamente pelo `kube-prometheus-stack`. citeturn0search0
 
 ## Operação
 
@@ -182,3 +246,44 @@ kubectl get svc -n cattle-monitoring-system
 kubectl get cm -n cattle-dashboards -l grafana_dashboard=1
 helm list -n cattle-monitoring-system
 ~~~
+
+Para validar o Grafana diretamente:
+
+~~~bash
+kubectl -n cattle-monitoring-system port-forward svc/kube-prometheus-stack-grafana 3000:80
+~~~
+
+Health check:
+
+~~~bash
+curl -s http://localhost:3000/api/health
+~~~
+
+Resposta validada:
+
+~~~json
+{
+  "database": "ok",
+  "version": "13.2.2"
+}
+~~~
+
+## Observação operacional
+
+O Grafana está operacional e os dashboards estão disponíveis. O `Unauthorized`/HTTP 401 observado em algumas chamadas de usuário/equipe é uma limitação das APIs específicas para acesso anônimo e não bloqueia os dashboards.
+
+Caso seja necessário eliminar também essas respostas para funcionalidades administrativas, deve-se avaliar posteriormente autenticação integrada/RBAC em vez de ampliar as permissões da identidade anônima.
+
+## Próximos passos
+
+- [x] instalar runtime de monitoramento
+- [x] instalar dashboards do Rancher
+- [x] integrar Monitoring à UI do Rancher
+- [x] corrigir `clusterId=local` do proxy
+- [x] dashboards disponíveis no Grafana
+- [x] Prometheus alimentando dashboards
+- [x] acesso anônimo Viewer
+- [ ] configurar alertas
+- [ ] avaliar Loki
+- [ ] revisar retenção de métricas
+- [ ] revisar recursos CPU/memória do stack
