@@ -10,6 +10,7 @@
 - IngressClass: traefik
 - TLS: cert-manager com CA interna
 - Fleet: operacional
+- Rancher Monitoring: instalado; ver `docs/11-monitoring.md`
 
 ## Arquitetura
 
@@ -133,6 +134,22 @@ O endpoint respondeu com a API do Rancher.
 
 O -k foi utilizado porque a CA interna ainda não estava instalada como CA confiável no macOS.
 
+## Rancher Monitoring
+
+O monitoramento foi instalado conforme a arquitetura desacoplada do Rancher 2.15:
+
+- `kube-prometheus-stack` 91.4.1;
+- Prometheus v0.94.0;
+- `rancher-monitoring-dashboards` 110.0.0+up0.1.2;
+- namespace `cattle-monitoring-system`;
+- dashboards em `cattle-dashboards`;
+- Prometheus, Grafana, Alertmanager, node-exporter e kube-state-metrics operacionais;
+- Monitoring já aparece na UI do Rancher.
+
+Os dashboards foram materializados como ConfigMaps em `cattle-dashboards`, porém ainda não estão aparecendo dentro da interface do Grafana. Essa pendência está documentada em `docs/11-monitoring.md`.
+
+A documentação oficial do Rancher 2.15 confirma a separação entre `kube-prometheus-stack` como runtime e `rancher-monitoring-dashboards` como camada de dashboards/integração. citeturn0search0
+
 ## Escala
 
 O Rancher está com uma réplica de propósito.
@@ -169,7 +186,8 @@ kubectl get pods -n cattle-fleet-system
 ## Próximos passos
 
 - [ ] instalar/trustar a CA interna no macOS
-- [ ] Rancher Monitoring
+- [x] instalar Rancher Monitoring
+- [ ] fazer dashboards aparecerem no Grafana
 - [ ] configurar alertas
 - [ ] Argo CD
 - [ ] GitOps
