@@ -3,10 +3,12 @@
 # Discord notifications are managed by AlertmanagerConfig + Secret.
 
 alertmanager:
+  enabled: true
   # Do not define webhook credentials here.
   # AlertmanagerConfig "discord" references Secret "discord-webhook".
 
 grafana:
+  enabled: true
   grafana.ini:
     auth.anonymous:
       enabled: true
