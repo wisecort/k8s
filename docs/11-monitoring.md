@@ -6,6 +6,7 @@
 - RKE2/Kubernetes: v1.36.4+rke2r1
 - `kube-prometheus-stack`: 91.4.1
 - Prometheus app: v0.94.0
+- Prometheus: v3.14.0
 - Grafana: 13.2.2
 - `rancher-monitoring-dashboards`: 110.0.0+up0.1.2
 - Namespace: `cattle-monitoring-system`
@@ -18,6 +19,13 @@
 - Alertmanager: operacional
 - Discord: integração operacional e validada com alerta real
 - Teste de alerta `KubePodCrashLooping`: validado de ponta a ponta
+- Prometheus: retenção de 15 dias
+- Prometheus: PVC de 10Gi em `longhorn-prod`
+- Prometheus: Longhorn com 1 réplica
+- Prometheus: requests 500m CPU / 1Gi RAM
+- Prometheus: limits 2 CPU / 2Gi RAM
+- Prometheus: `/-/ready` validado
+- Prometheus TSDB: 247.790 séries observadas após a implantação da persistência
 - Estado pendente no encerramento do teste: alerta ainda estava `firing` no Prometheus/Alertmanager após a exclusão do Pod; a resolução ainda precisa ser confirmada
 
 ## Arquitetura
@@ -52,20 +60,79 @@ A partir do Rancher 2.15, o monitoramento utiliza uma arquitetura desacoplada: o
 
 ## Instalação do runtime
 
+A configuração declarativa atual está em:
+
+~~~text
+platform/monitoring/kube-prometheus-stack-values.yaml
+~~~
+
+Os valores incluem retenção, recursos, persistência do Prometheus e as opções necessárias para o ambiente RKE2. Segredos não são armazenados no arquivo.
+
 ~~~bash
-helm upgrade --install kube-prometheus-stack \
+helm upgrade kube-prometheus-stack \
   prometheus-community/kube-prometheus-stack \
   --namespace cattle-monitoring-system \
   --version 91.4.1 \
-  --set prometheus.prometheusSpec.serviceMonitorSelectorNilUsesHelmValues=false \
-  --set prometheus.prometheusSpec.podMonitorSelectorNilUsesHelmValues=false \
-  --set kubeEtcd.enabled=false \
-  --set kubeControllerManager.enabled=false \
-  --set kubeScheduler.enabled=false \
-  --set kubeProxy.enabled=false \
+  --reset-values \
+  -f platform/monitoring/kube-prometheus-stack-values.yaml \
   --wait \
   --timeout 10m
 ~~~
+
+Configuração efetiva do Prometheus:
+
+~~~yaml
+prometheus:
+  prometheusSpec:
+    retention: 15d
+    podMonitorSelectorNilUsesHelmValues: false
+    serviceMonitorSelectorNilUsesHelmValues: false
+    resources:
+      requests:
+        cpu: 500m
+        memory: 1Gi
+      limits:
+        cpu: "2"
+        memory: 2Gi
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: longhorn-prod
+          accessModes:
+            - ReadWriteOnce
+          resources:
+            requests:
+              storage: 10Gi
+~~~
+
+O PVC foi criado com 10Gi em `longhorn-prod`. O volume Longhorn ficou `attached` e `healthy`, com uma única réplica, reduzindo a multiplicação de I/O no storage físico do Proxmox.
+
+Validações realizadas:
+
+~~~text
+Prometheus Pod:       2/2 Running
+PVC:                  Bound
+PVC capacity:         10Gi
+StorageClass:         longhorn-prod
+Longhorn state:       attached
+Longhorn robustness:  healthy
+Longhorn replicas:    1
+Prometheus /-/ready:  Prometheus Server is Ready.
+Retention:            15d
+TSDB corruption:      0
+~~~
+
+O endpoint de runtime também confirmou:
+
+~~~json
+{
+  "reloadConfigSuccess": true,
+  "corruptionCount": 0,
+  "storageRetention": "15d"
+}
+~~~
+
+O TSDB apresentou aproximadamente 247.790 séries no momento da validação inicial da persistência. O consumo deve ser acompanhado antes de aumentar ou reduzir a retenção.
 
 ## Rancher Monitoring Dashboards
 
@@ -174,7 +241,7 @@ Também foi observado `403` em:
 /api/teams/search
 ~~~
 
-Essas respostas estão relacionadas a funcionalidades de usuário/equipe não disponíveis para a identidade anônima e **não impedem a visualização dos dashboards**.
+Essas respostas estão relacionadas a funcionalidades de usuário/equipe não disponíveis para a identidade anônima e não impedem a visualização dos dashboards.
 
 Os logs também confirmaram consultas Prometheus bem-sucedidas:
 
@@ -218,7 +285,7 @@ spec:
           sendResolved: true
 ~~~
 
-O webhook fica armazenado no Secret `discord-webhook`; o valor do webhook **não deve ser armazenado no Git nem documentado em texto**.
+O webhook fica armazenado no Secret `discord-webhook`; o valor do webhook não deve ser armazenado no Git nem documentado em texto.
 
 O Alertmanager foi configurado para utilizar a `AlertmanagerConfig` como configuração principal. A configuração efetiva passou a utilizar:
 
@@ -240,14 +307,7 @@ Resultado validado: `SUCCESS`.
 
 Foi enviado um alerta sintético chamado `DiscordTest2` diretamente à API do Alertmanager.
 
-O alerta apareceu no Alertmanager como `active` e foi recebido no Discord:
-
-~~~text
-[FIRING:1] DiscordTest2
-alertname = DiscordTest2
-severity = warning
-test = true
-~~~
+O alerta apareceu no Alertmanager como `active` e foi recebido no Discord.
 
 Esse teste comprovou a comunicação Alertmanager → Discord.
 
@@ -273,44 +333,11 @@ spec:
           exit 1
 ~~~
 
-O Pod entrou em falha e apresentou reinicializações:
+O Pod entrou em falha e apresentou reinicializações.
 
-~~~text
-alert-test-crashloop   0/1   Error   5 restarts
-~~~
+O `kube-state-metrics` expôs `CrashLoopBackOff`, e a regra oficial `KubePodCrashLooping` entrou em `firing` após a duração configurada de 15 minutos.
 
-O `kube-state-metrics` expôs:
-
-~~~text
-kube_pod_container_status_waiting_reason
-reason="CrashLoopBackOff"
-value="1"
-~~~
-
-E:
-
-~~~text
-kube_pod_container_status_restarts_total
-value="4"
-~~~
-
-A regra oficial `KubePodCrashLooping` foi encontrada no Prometheus:
-
-~~~promql
-max_over_time(kube_pod_container_status_waiting_reason{job="kube-state-metrics",namespace=~".*",reason="CrashLoopBackOff"}[5m]) >= 1
-~~~
-
-A regra possui:
-
-~~~text
-duration: 900s
-severity: warning
-state inicial: pending
-~~~
-
-Após permanecer em condição de CrashLoopBackOff por mais de 15 minutos, o alerta entrou em `firing` no Prometheus/Alertmanager e chegou ao Discord.
-
-Isso comprovou o fluxo real:
+O alerta chegou ao Discord, comprovando o fluxo real:
 
 ~~~text
 Pod com problema
@@ -342,29 +369,11 @@ O Pod foi removido:
 kubectl delete pod alert-test-crashloop
 ~~~
 
-Após a exclusão, a consulta direta da métrica:
+Após a exclusão, a consulta direta da métrica retornou `result: []`.
 
-~~~promql
-kube_pod_container_status_waiting_reason{namespace="default",pod="alert-test-crashloop",reason="CrashLoopBackOff"}
-~~~
+No último estado observado, o Prometheus ainda mostrava o alerta `KubePodCrashLooping` como `firing`, e o Alertmanager também o mostrava como `active`.
 
-retornou:
-
-~~~text
-result: []
-~~~
-
-Porém, no último estado observado, o Prometheus ainda mostrava o alerta `KubePodCrashLooping` como `firing`, e o Alertmanager também o mostrava como `active`.
-
-Último estado conhecido:
-
-~~~text
-KubePodCrashLooping
-Starts At: 2026-09-21 11:53:59 UTC
-State: active/firing
-~~~
-
-Portanto, **a resolução do alerta após a remoção do Pod ainda precisa ser confirmada** quando a próxima reconciliação do Prometheus ocorrer.
+Portanto, a resolução do alerta após a remoção do Pod ainda precisa ser confirmada.
 
 Comandos para retomar a validação:
 
@@ -407,6 +416,10 @@ AlertmanagerConfig          OK
 Discord notification        OK
 KubePodCrashLooping         OK / firing test validated
 Resolution after deletion   PENDENTE DE CONFIRMAÇÃO
+Prometheus persistence      OK
+Prometheus retention        15d
+Prometheus PVC              10Gi
+Prometheus Longhorn         1 replica / healthy
 ~~~
 
 Pods validados em `cattle-monitoring-system`:
@@ -485,9 +498,9 @@ Resposta validada:
 
 O Grafana está operacional e os dashboards estão disponíveis. O `Unauthorized`/HTTP 401 observado em algumas chamadas de usuário/equipe é uma limitação das APIs específicas para acesso anônimo e não bloqueia os dashboards.
 
-O webhook do Discord foi exposto durante a fase de testes. **Antes de considerar essa integração definitiva, o webhook deve ser rotacionado/revogado e mantido exclusivamente no Secret `discord-webhook`, sem valor em Git ou nos valores Helm.**
+O webhook do Discord foi exposto durante a fase de testes. Antes de considerar essa integração definitiva, o webhook deve ser rotacionado/revogado e mantido exclusivamente no Secret `discord-webhook`, sem valor em Git ou nos valores Helm.
 
-Caso seja necessário eliminar também as respostas de autenticação para funcionalidades administrativas, deve-se avaliar posteriormente autenticação integrada/RBAC em vez de ampliar as permissões da identidade anônima.
+Como a configuração do Prometheus foi consolidada em arquivo versionado, alterações futuras devem ser feitas em `platform/monitoring/kube-prometheus-stack-values.yaml` e aplicadas com Helm, evitando alterações manuais no StatefulSet.
 
 ## Próximos passos
 
@@ -502,8 +515,11 @@ Caso seja necessário eliminar também as respostas de autenticação para funci
 - [x] integrar Alertmanager com Discord
 - [x] validar alerta sintético no Discord
 - [x] validar alerta real `KubePodCrashLooping`
+- [x] configurar retenção de 15 dias
+- [x] configurar PVC persistente de 10Gi
+- [x] configurar recursos CPU/memória do Prometheus
+- [x] manter Prometheus com 1 réplica Longhorn
 - [ ] confirmar `RESOLVED` após remoção do Pod de teste
-- [ ] rotacionar webhook do Discord e remover valor dos Helm values
-- [ ] revisar retenção de métricas
-- [ ] revisar recursos CPU/memória do stack
+- [ ] rotacionar webhook do Discord e remover valor dos Helm values históricos
+- [ ] acompanhar consumo do PVC e TSDB
 - [ ] avaliar Loki
