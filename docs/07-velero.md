@@ -351,3 +351,75 @@ Antes de considerar o Velero como componente de produção:
 - [ ] monitorar falhas;
 - [ ] validar DR completo com PVC;
 - [ ] documentar procedimento final de Disaster Recovery.
+
+
+## Backup Velero do DR combinado
+
+Foi criado um backup específico do namespace `dr-test`:
+
+```bash
+velero backup create dr-test-combined \
+  --include-namespaces dr-test \
+  --snapshot-volumes=false \
+  --wait
+```
+
+Resultado:
+
+```
+Phase: Completed
+Total items: 32
+Items backed up: 32
+Velero-Native Snapshot PVs: false
+CSI Snapshots: none
+Pod Volume Backups: none
+```
+
+O comportamento é intencional: Velero protege os objetos e Longhorn protege os dados.
+
+## DR combinado validado
+
+Foi realizado um teste completo de perda do namespace `dr-test`, PVC e volume Longhorn.
+
+O restore foi dividido em duas camadas:
+
+1. Velero restaurou os objetos Kubernetes;
+2. Longhorn restaurou o volume a partir do Cloudflare R2.
+
+O arquivo `/data/teste.bin` foi recuperado e validado.
+
+SHA-256 original e após o DR:
+
+```
+69da2dd94af7335e8635d4301a78e43ef9e86abc1f2f54667792f8c40fb1026b
+```
+
+## Ajuste do Schedule
+
+O Schedule diário existente é:
+
+```
+backup-daily-r2
+```
+
+Política:
+
+- 04:00;
+- retenção de 30 dias;
+- R2 `velero-backups-qg`;
+- namespaces de infraestrutura excluídos.
+
+Como o backup de PVC é responsabilidade do Longhorn, o Schedule deve ser ajustado para não tentar snapshots de volumes:
+
+```bash
+velero schedule update backup-daily-r2 --snapshot-volumes=false
+```
+
+Validar depois:
+
+```bash
+velero schedule describe backup-daily-r2
+velero backup get
+```
+
+A alteração de runtime deve ser aplicada no cluster antes de considerar o Schedule definitivamente alinhado à arquitetura documentada.
