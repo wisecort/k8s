@@ -11,70 +11,69 @@
 - [x] VIP 10.255.10.140
 - [x] DNS interno
 - [x] kubeconfig via VIP
-- [x] Longhorn
-- [x] 3 réplicas Longhorn
-- [x] teste de PVC
-- [x] Backup Longhorn em Cloudflare R2
-- [x] teste de restore a partir do R2
-- [x] validação dos dados restaurados
-- [x] StorageClass `longhorn-prod`
-- [x] associação automática de novos volumes ao grupo de backup
+- [x] Longhorn 1.12.1
+- [x] 3 nós de storage Longhorn
+- [x] data path /var/lib/longhorn
+- [x] StorageClass padrão longhorn com 3 réplicas
+- [x] StorageClass longhorn-prod
+- [x] backup Longhorn em Cloudflare R2
 - [x] Recurring Job diário do Longhorn
 - [x] retenção de 60 backups
-- [x] execução manual do Recurring Job
-- [x] validação de backup recorrente no R2
-- [x] instalação do Velero 1.18.2
-- [x] criação do bucket R2 separado para Velero
-- [x] BackupStorageLocation do Velero validado como Available
-- [x] backup de objetos Kubernetes
-- [x] perda controlada de namespace de teste
-- [x] restore de objetos Kubernetes via Velero
-- [x] aplicação de teste restaurada e Running
+- [x] teste de backup e restore
+- [x] Velero 1.18.2
+- [x] bucket R2 separado para Velero
+- [x] backup e restore de objetos Kubernetes
+- [x] DR combinado Velero + Longhorn
+- [x] cert-manager
+- [x] PKI interna do Rancher
+- [x] Rancher 2.15.1
+- [x] Rancher via Traefik
+- [x] Fleet operacional
 
-## Próximos passos
+## Longhorn atual
 
-### 1. Backup Longhorn
-
-- [x] destino S3-compatible
-- [x] teste de backup Full
-- [x] teste de restore
-- [x] política de backup
+- [x] StorageClass longhorn: 3 réplicas
+- [x] StorageClass longhorn-prod: 1 réplica
+- [x] backup recorrente diário às 02:00 UTC
 - [x] retenção de 60 backups
-- [x] Recurring Backup Job diário às 02:00
+- [x] Cloudflare R2
 - [ ] monitoramento de falhas
 - [ ] teste periódico de restore
 - [ ] backup periódico do sistema Longhorn
+- [ ] revisar independência física do storage
 
-### 2. Velero
+## Velero
 
 - [x] Velero instalado
-- [x] plugin AWS/S3 instalado
+- [x] plugin AWS/S3
 - [x] bucket R2 separado
 - [x] BackupStorageLocation
-- [x] validação de acesso ao R2
-- [x] backup de objetos Kubernetes
-- [x] restore de objetos Kubernetes
-- [x] teste de perda de namespace
-- [x] acompanhar estabilidade da integração `x-amz-tagging` / R2
-- [ ] política de retenção de 30 dias
-- [ ] Schedule diário às 04:00
-- [ ] validar backup automático do Schedule
+- [x] backup de objetos
+- [x] restore de objetos
+- [x] DR combinado
+- [ ] acompanhar estabilidade da integração R2/plugin
+- [ ] validar Schedule automático
 - [ ] monitoramento de falhas
-- [x] teste de Disaster Recovery completo com PVC
 
-### 3. Ingress
+## Rancher
 
-- [ ] HAProxy 80/443
-- [ ] Traefik
-- [ ] publicação de aplicação de teste
+- [x] Rancher 2.15.1
+- [x] hostname rancher.k8s.internal
+- [x] TLS interno via cert-manager
+- [x] Ingress via Traefik
+- [x] Fleet operacional
+- [x] endpoint validado via HTTPS
+- [ ] instalar CA interna nas estações administrativas
+- [ ] Rancher Monitoring
+- [ ] avaliar escala para 3 réplicas após estabilização do storage/I/O
 
-### 4. TLS
+## Ingress
 
-- [ ] cert-manager
-- [ ] Let's Encrypt
-- [ ] DNS-01
+- [x] Traefik
+- [x] publicação interna do Rancher
+- [ ] aplicação de teste
 
-### 5. Segurança
+## Segurança
 
 - [ ] NetworkPolicy
 - [ ] ResourceQuota
@@ -83,34 +82,28 @@
 - [ ] Pod Security Standards
 - [ ] isolamento por namespace
 
-### 6. Observabilidade
+## Observabilidade
 
+- [ ] Rancher Monitoring
 - [ ] Prometheus
 - [ ] Grafana
 - [ ] Alertmanager
 - [ ] Loki
 
-### 7. GitOps
+## GitOps
 
 - [ ] Argo CD
 - [ ] estrutura declarativa de aplicações
 
-### 8. Disaster Recovery
+## Disaster Recovery
 
 - [x] restore de volume a partir do R2
-- [x] restore de objetos Kubernetes via Velero
-- [x] DR combinado: objetos Velero + dados Longhorn
+- [x] restore de objetos via Velero
+- [x] DR combinado
 - [ ] perda de worker
+- [ ] perda de host Proxmox
 - [ ] perda de control plane
 - [ ] recuperação completa
-- [ ] teste periódico de DR
-
-
-## Arquitetura de Backup e DR
-
-- [x] documentação da separação Velero/Longhorn
-- [x] documentação dos buckets R2
-- [x] documentação do fluxo de backup
-- [x] documentação do fluxo de restore
-- [x] runbook de DR combinado
-- [ ] automatizar o runbook de DR
+- [ ] RPO/RTO formal
+- [ ] teste periódico
+- [ ] automação do runbook
