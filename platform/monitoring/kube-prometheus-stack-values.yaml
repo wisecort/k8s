@@ -1,0 +1,54 @@
+# kube-prometheus-stack values for the RKE2 platform.
+# Secrets are intentionally not stored here.
+# Discord notifications are managed by AlertmanagerConfig + Secret.
+
+alertmanager:
+  # Do not define webhook credentials here.
+  # AlertmanagerConfig "discord" references Secret "discord-webhook".
+
+grafana:
+  grafana.ini:
+    auth.anonymous:
+      enabled: true
+      org_role: Viewer
+
+  sidecar:
+    dashboards:
+      searchNamespace: ALL
+
+kubeControllerManager:
+  enabled: false
+
+kubeEtcd:
+  enabled: false
+
+kubeProxy:
+  enabled: false
+
+kubeScheduler:
+  enabled: false
+
+prometheus:
+  prometheusSpec:
+    retention: 15d
+
+    podMonitorSelectorNilUsesHelmValues: false
+    serviceMonitorSelectorNilUsesHelmValues: false
+
+    resources:
+      requests:
+        cpu: 500m
+        memory: 1Gi
+      limits:
+        cpu: "2"
+        memory: 2Gi
+
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: longhorn-prod
+          accessModes:
+            - ReadWriteOnce
+          resources:
+            requests:
+              storage: 50Gi
