@@ -30,8 +30,12 @@
 - [x] Rancher via Traefik
 - [x] Fleet operacional
 - [x] kube-prometheus-stack 91.4.1
+- [x] Grafana 13.2.2
 - [x] rancher-monitoring-dashboards 110.0.0+up0.1.2
 - [x] Rancher Monitoring disponível na UI
+- [x] dashboards disponíveis no Grafana
+- [x] acesso anônimo Viewer no Grafana
+- [x] integração Grafana via proxy do Rancher
 
 ## Longhorn atual
 
@@ -67,8 +71,9 @@
 - [x] Fleet operacional
 - [x] endpoint validado via HTTPS
 - [x] Rancher Monitoring instalado
+- [x] dashboards disponíveis no Grafana
+- [x] integração Grafana via proxy
 - [ ] instalar CA interna nas estações administrativas
-- [ ] fazer dashboards aparecerem no Grafana
 - [ ] configurar alertas
 - [ ] avaliar escala para 3 réplicas após estabilização do storage/I/O
 
@@ -95,7 +100,8 @@
 - [x] Alertmanager
 - [x] node-exporter
 - [x] kube-state-metrics
-- [ ] dashboards no Grafana
+- [x] dashboards no Grafana
+- [x] consultas Prometheus nos dashboards
 - [ ] alertas
 - [ ] Loki
 
