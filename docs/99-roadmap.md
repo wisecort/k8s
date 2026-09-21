@@ -55,12 +55,12 @@
 - [x] backup de objetos Kubernetes
 - [x] restore de objetos Kubernetes
 - [x] teste de perda de namespace
-- [ ] acompanhar estabilidade da integração `x-amz-tagging` / R2
+- [x] acompanhar estabilidade da integração `x-amz-tagging` / R2
 - [ ] política de retenção de 30 dias
 - [ ] Schedule diário às 04:00
 - [ ] validar backup automático do Schedule
 - [ ] monitoramento de falhas
-- [ ] teste de Disaster Recovery completo com PVC
+- [x] teste de Disaster Recovery completo com PVC
 
 ### 3. Ingress
 
@@ -99,8 +99,18 @@
 
 - [x] restore de volume a partir do R2
 - [x] restore de objetos Kubernetes via Velero
-- [ ] DR combinado: objetos Velero + dados Longhorn
+- [x] DR combinado: objetos Velero + dados Longhorn
 - [ ] perda de worker
 - [ ] perda de control plane
 - [ ] recuperação completa
 - [ ] teste periódico de DR
+
+
+## Arquitetura de Backup e DR
+
+- [x] documentação da separação Velero/Longhorn
+- [x] documentação dos buckets R2
+- [x] documentação do fluxo de backup
+- [x] documentação do fluxo de restore
+- [x] runbook de DR combinado
+- [ ] automatizar o runbook de DR
