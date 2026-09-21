@@ -11,6 +11,8 @@ grafana:
     auth.anonymous:
       enabled: true
       org_role: Viewer
+    security:
+      allow_embedding: true
 
   sidecar:
     dashboards:
