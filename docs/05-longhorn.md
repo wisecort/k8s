@@ -396,3 +396,60 @@ O backup já armazenado no R2 não depende desses recursos Kubernetes permanecer
 - monitoramento e alertas de falha;
 - teste periódico de restore;
 - integração com o plano de Disaster Recovery.
+
+
+## Restore de volume para Disaster Recovery
+
+O mecanismo validado para restore utiliza uma StorageClass temporária com `fromBackup` apontando para o backup no R2.
+
+Exemplo:
+
+```yaml
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: longhorn-dr-restore
+provisioner: driver.longhorn.io
+allowVolumeExpansion: true
+reclaimPolicy: Delete
+volumeBindingMode: Immediate
+parameters:
+  numberOfReplicas: "3"
+  staleReplicaTimeout: "2880"
+  fromBackup: "s3://<bucket>@auto/backupstore?backup=<backup>&volume=<volume>"
+  fsType: "ext4"
+  dataLocality: "disabled"
+  unmapMarkSnapChainRemoved: "ignored"
+  disableRevisionCounter: "true"
+  dataEngine: "v1"
+  backupTargetName: "default"
+```
+
+O volume restaurado deve ser validado como `healthy` antes de iniciar o workload.
+
+## DR combinado validado
+
+Foi testada a perda de namespace, PVC e volume original.
+
+A recuperação utilizou:
+
+```
+Velero -> objetos Kubernetes
+Longhorn -> dados do PVC
+```
+
+O volume original foi destruído e restaurado a partir de:
+
+```
+backup-df6691ad8e4e450f
+```
+
+O volume restaurado utilizou 3 réplicas.
+
+O arquivo `/data/teste.bin` apresentou o mesmo SHA-256 antes e depois do desastre:
+
+```
+69da2dd94af7335e8635d4301a78e43ef9e86abc1f2f54667792f8c40fb1026b
+```
+
+Não considerar o restore Velero isoladamente como recuperação dos dados do PVC.
