@@ -75,7 +75,7 @@ O `node-agent` também foi instalado para deixar o cluster preparado para File S
 
 O BackupStorageLocation padrão é:
 
-```text
+```
 Namespace: velero
 Name: default
 Provider: aws
@@ -88,11 +88,11 @@ Phase: Available
 
 Endpoint:
 
-```text
+```
 https://<ACCOUNT_ID>.r2.cloudflarestorage.com
 ```
 
-Não registrar o Account ID/credenciais em documentação quando isso permitir identificar ou acessar recursos protegidos.
+Não registrar credenciais no Git.
 
 Verificar:
 
@@ -101,13 +101,7 @@ velero backup-location get
 kubectl -n velero get backupstoragelocation default -o yaml
 ```
 
-A validação do BackupStorageLocation foi concluída com sucesso:
-
-```
-PHASE: Available
-ACCESS MODE: ReadWrite
-DEFAULT: true
-```
+A validação do BackupStorageLocation foi concluída com sucesso.
 
 ## Componentes
 
@@ -128,11 +122,11 @@ Todos os componentes foram validados como `Running`.
 
 ## Estratégia de backup
 
-A estratégia planejada para aplicações é:
+A estratégia adotada para aplicações é:
 
 ### Velero
 
-Backup dos objetos Kubernetes, incluindo conforme o escopo do backup:
+Backup dos objetos Kubernetes, incluindo conforme o escopo:
 
 - Deployments;
 - StatefulSets;
@@ -145,7 +139,7 @@ Backup dos objetos Kubernetes, incluindo conforme o escopo do backup:
 - RBAC;
 - Jobs;
 - CronJobs;
-- CRs/CRDs quando incluídos no escopo;
+- CRs/CRDs quando incluídos;
 - PVC/PV metadata;
 - demais recursos Kubernetes selecionados.
 
@@ -164,7 +158,7 @@ Os PVCs de produção devem utilizar:
 storageClassName: longhorn-prod
 ```
 
-## Teste inicial
+## Teste de backup de objetos
 
 Foi criado o namespace:
 
@@ -187,20 +181,11 @@ velero backup create velero-test-01 \
   --wait
 ```
 
-O Velero processou todos os recursos:
+O Velero processou 25 itens, porém o primeiro backup terminou como `Failed`.
 
-```
-Total items to be backed up: 25
-Items backed up: 25
-```
+### Falha inicial com Cloudflare R2
 
-Entretanto, o backup terminou como `Failed`.
-
-## Falha encontrada com Cloudflare R2
-
-A causa foi identificada nos logs do Deployment do Velero.
-
-Erro:
+A causa foi identificada nos logs:
 
 ```
 StatusCode: 501
@@ -208,112 +193,161 @@ NotImplemented:
 Header 'x-amz-tagging' with value '' not implemented
 ```
 
-O erro ocorreu ao tentar gravar:
+O erro ocorreu durante a persistência dos artefatos do backup no R2.
 
-```
-backups/velero-test-01/velero-test-01-logs.gz
-```
-
-e posteriormente:
-
-```
-backups/velero-test-01/velero-backup.json
-```
-
-Portanto:
-
-- RKE2/Kubernetes: OK;
-- Velero: OK;
-- BackupStorageLocation: OK;
-- autenticação no R2: OK;
-- processamento dos objetos: OK;
-- persistência final do backup no R2: falhou devido ao header `x-amz-tagging`.
-
-O erro não envolve o Longhorn.
-
-## Situação do plugin AWS
-
-A versão atualmente instalada é:
+A versão do plugin permaneceu:
 
 ```
 velero/velero-plugin-for-aws:v1.14.2
 ```
 
-O problema de `x-amz-tagging` foi identificado durante a integração com Cloudflare R2.
+Não foi aplicado release candidate em produção.
 
-A estratégia atual é **não aplicar uma versão release candidate em produção sem validação**.
+## Segundo backup — validado
 
-Foi criada uma tarefa de monitoramento externo para acompanhar a publicação de uma versão estável do `velero-plugin-for-aws` contendo a correção relacionada a:
-
-```
-Only set PutObject Tagging when tags are configured
-```
-
-Quando uma versão estável corrigida e compatível com Velero 1.18.2 estiver disponível, o plugin deverá ser atualizado e o teste de backup deverá ser repetido.
-
-Verificar a imagem atualmente instalada:
-
-```bash
-kubectl -n velero get deployment velero \
-  -o jsonpath='{.spec.template.spec.initContainers[?(@.name=="velero-velero-plugin-for-aws")].image}{"\\n"}'
-```
-
-## Teste pendente
-
-Depois que existir uma versão estável corrigida do plugin:
-
-1. atualizar somente o initContainer do plugin AWS;
-2. aguardar o rollout do Deployment;
-3. criar novo backup do namespace `velero-test`;
-4. validar `Completed`;
-5. validar os objetos armazenados no R2;
-6. remover o namespace de teste;
-7. executar restore;
-8. validar Deployment, Service, ConfigMap e Secret;
-9. documentar o resultado.
-
-Comandos previstos:
+Um novo backup foi executado posteriormente, mantendo o plugin `v1.14.2`:
 
 ```bash
 velero backup create velero-test-02 \
   --include-namespaces velero-test \
   --wait
+```
 
+Resultado:
+
+```
+NAME              STATUS      ERRORS   WARNINGS
+velero-test-02    Completed   0        0
+```
+
+Detalhes validados:
+
+- 25 itens processados;
+- 25 itens armazenados;
+- 0 erros;
+- 0 warnings;
+- backup persistido no R2;
+- retenção inicial do objeto: 720h.
+
+O sucesso do segundo teste demonstra que o fluxo de backup de objetos Kubernetes para o R2 está operacional no ambiente atual. A causa da diferença entre o primeiro e o segundo teste não foi determinada e deve continuar sendo acompanhada antes de considerar a integração definitivamente encerrada.
+
+## Restore de objetos Kubernetes
+
+Foi realizado um teste de perda do namespace.
+
+Namespace removido:
+
+```bash
+kubectl delete namespace velero-test
+```
+
+Restore executado:
+
+```bash
+velero restore create velero-restore-01 \
+  --from-backup velero-test-02 \
+  --wait
+```
+
+Resultado:
+
+```
+NAME                BACKUP           STATUS      ERRORS   WARNINGS
+velero-restore-01   velero-test-02   Completed   0        1
+```
+
+Foram restaurados 12 itens.
+
+Após o restore, foi validado:
+
+```bash
+kubectl -n velero-test get all
+kubectl -n velero-test get configmap,secret
+```
+
+Resultado:
+
+- Deployment `nginx`: 2/2 disponíveis;
+- dois Pods: `Running`;
+- ReplicaSet: 2 réplicas prontas;
+- Service `nginx`: restaurado;
+- ConfigMap `app-config`: restaurado;
+- Secret `app-secret`: restaurado.
+
+### Warning observado
+
+O único warning foi referente ao ConfigMap:
+
+```
+kube-root-ca.crt
+```
+
+O recurso já existia no namespace restaurado e era diferente da cópia do backup. Trata-se de um recurso gerenciado pelo Kubernetes e o warning não impediu o restore da aplicação.
+
+## Limitação atual
+
+O teste acima valida somente **objetos Kubernetes**.
+
+Ainda não foi validado o DR completo de uma aplicação com PVC.
+
+A arquitetura definida mantém responsabilidades separadas:
+
+```
+Velero → objetos Kubernetes
+Longhorn → dados dos PVCs
+```
+
+Portanto, não se deve considerar que um restore Velero sozinho restaura automaticamente o conteúdo dos volumes Longhorn.
+
+O próximo teste de DR deverá combinar:
+
+1. aplicação Kubernetes;
+2. PVC usando `longhorn-prod`;
+3. dados gravados no PVC;
+4. backup dos objetos pelo Velero;
+5. backup do volume pelo Longhorn/R2;
+6. perda da aplicação;
+7. restore dos objetos via Velero;
+8. recuperação do volume via Longhorn;
+9. validação dos dados da aplicação.
+
+## Política de backup do Velero
+
+A política inicial definida para objetos Kubernetes será:
+
+- frequência: diária;
+- horário: **04:00**;
+- destino: Cloudflare R2 `velero-backups-qg`;
+- escopo: objetos Kubernetes das aplicações;
+- retenção inicial: **30 dias**;
+- volumes: não utilizar Velero como backup primário dos dados dos PVCs;
+- dados dos PVCs: responsabilidade do Longhorn/R2.
+
+A política será implementada por meio de um `Schedule` do Velero.
+
+Antes de considerar a política pronta para produção, validar:
+
+```bash
+velero schedule get
+velero schedule describe <nome-do-schedule>
 velero backup get
-velero backup describe velero-test-02 --details
 ```
 
-## Restore
-
-O restore do Velero ainda não foi considerado validado.
-
-A validação final deverá demonstrar:
-
-```
-Backup
-  ↓
-Cloudflare R2
-  ↓
-delete namespace
-  ↓
-Velero Restore
-  ↓
-objetos Kubernetes restaurados
-  ↓
-aplicação funcionando
-```
-
-O restore de dados dos PVCs continua sendo responsabilidade do fluxo Longhorn/R2 já validado separadamente.
+Também deverá ser validado pelo menos um backup criado pelo Schedule.
 
 ## Operação
 
-Antes de considerar o Velero pronto para produção:
+Antes de considerar o Velero como componente de produção:
 
-- resolver a incompatibilidade do plugin com R2;
-- validar backup completo;
-- validar restore;
-- definir retenção;
-- definir frequência;
-- monitorar falhas;
-- documentar procedimento de Disaster Recovery.
-
+- [x] instalação;
+- [x] BackupStorageLocation;
+- [x] acesso ao R2;
+- [x] backup de objetos Kubernetes;
+- [x] restore de objetos Kubernetes;
+- [ ] acompanhar estabilidade da integração R2/plugin;
+- [ ] política de retenção de 30 dias;
+- [ ] Schedule diário às 04:00;
+- [ ] validar backup automático do Schedule;
+- [ ] monitorar falhas;
+- [ ] validar DR completo com PVC;
+- [ ] documentar procedimento final de Disaster Recovery.
